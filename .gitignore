@@ -1,0 +1,69 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+
+# Tests / coverage
+.pytest_cache/
+.coverage*
+htmlcov/
+
+# Typage / analyse
+.mypy_cache/
+.pytype/
+.pyre/
+
+# Environnements virtuels
+.venv/
+venv/
+ENV/
+env/
+*.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS / ?diteurs
+.DS_Store
+.AppleDouble
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+.vscode/
+.idea/
+*.code-workspace
+
+# Logs / runtime
+*.log
+logs/
+*.pid
+*.sqlite3
+*.db
+
+# Secrets (exemples)
+*.key
+*.pem
+*.crt
+*.p12
+*.token
+*.secret
+.secrets/
+.env.local
+.env.*
+!.env.example
+
+# Exports lourds
+outputs/
+exports/
+
+# Single log folder
+log/
