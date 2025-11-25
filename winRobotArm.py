@@ -250,24 +250,21 @@ class WinRobotArm(tk.LabelFrame):
         self._call_dash("brake release", lambda arm: arm.brake_release())
 
     def on_play(self):
-        """Envoie VialsNB (via RTDE: GPii[RTDE_INPUT_REGISTER]) puis lance le programme chargé."""
         try:
-            vial_id, group = self._get_selected_vial_any()
+            vial_id, group = self._get_selected_vial_any()  # ta méthode actuelle
             if not vial_id:
                 self.info.add("Play → aucune vial E* ni F* sélectionnée.", level="warning")
                 return
 
             vnum = self._vial_id_to_number(vial_id)
-            arm = self._get_ur3()
 
-            # Stop au cas où un programme tourne encore
+            arm = self._get_ur3()
             arm.stop()
 
-            # Écrire VialsNB via RTDE (GPii[RTDE_INPUT_REGISTER])
-            arm.set_input_int_register_rtde(RTDE_INPUT_REGISTER, vnum)
-            self.info.add(f"UR3 RTDE: GPii[{RTDE_INPUT_REGISTER}] (VialsNB) ← {vnum} ({vial_id}, groupe {group})")
+            # utilisation du helper côté device :
+            arm.set_vials_nb(vnum)
+            self.info.add(f"UR3 RTDE: VialsNB ← {vnum} ({vial_id}, groupe {group})")
 
-            # Lancer le programme déjà chargé
             before = arm.get_program_state()
             resp   = arm.play()
             after  = arm.get_program_state()
