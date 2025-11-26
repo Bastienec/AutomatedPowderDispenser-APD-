@@ -11,7 +11,7 @@ from config import SCALE_CONFIG
 from guiUtils import GUIFactory, ToolTip
 from deviceScale import WM
 
-WATCH_PERIOD_MS = 3000  # check connexion toutes les 3 s
+WATCH_PERIOD_MS = 5000  # check connexion toutes les 5 s
 
 
 class WinBalance(tk.LabelFrame):
@@ -22,13 +22,8 @@ class WinBalance(tk.LabelFrame):
         self.devices = devices
         self.factory = GUIFactory(self)
 
-        # Vars UI (non éditables)
-        self.var_ip     = tk.StringVar(value=str(SCALE_CONFIG.get('ip', '192.168.0.50')))
-        self.var_port   = tk.StringVar(value=str(SCALE_CONFIG.get('port', 81)))
-        self.var_scheme = tk.StringVar(value=str(SCALE_CONFIG.get('scheme', 'http')).lower())
-
         # Lecture de poids
-        self.var_weight = tk.StringVar(value="— g")
+        self.var_weight = tk.StringVar(value="— mg")
 
         # Méthode (menu "Methods" sur la balance)
         self.var_method = tk.StringVar(value="DOSING")
@@ -50,6 +45,7 @@ class WinBalance(tk.LabelFrame):
 
         # Thread de polling des notifications de dosing
         self._dosing_thread: threading.Thread | None = None
+        self._dosing_stop: threading.Event | None = None  # pour stopper le polling
 
         self._build()
 
@@ -61,49 +57,33 @@ class WinBalance(tk.LabelFrame):
 
     # ---------------------------------------------------------
     def _build(self):
-        # Ligne 0 : IP/Port + bouton Connect
-        self.factory.create_label("Scheme", 0, 0)
-        cb_scheme = ttk.Combobox(
-            self,
-            textvariable=self.var_scheme,
-            width=6,
-            values=("http", "https"),
-            state="readonly",
-        )
-        cb_scheme.grid(row=0, column=1, padx=5, pady=5)
-
-        self.factory.create_label("IP", 0, 2)
-        self.factory.create_entry(self.var_ip, 0, 3, width=16)
-
-        self.factory.create_label("Port", 0, 4)
-        self.factory.create_entry(self.var_port, 0, 5, width=6)
-
-        self.btn_connect = self.factory.create_btn("Connect", self.on_connect, 0, 6)
+        # --- Ligne 0 ---
+        self.btn_connect = self.factory.create_btn("Connect", self.on_connect, 0, 0)
         ToolTip(self.btn_connect, "Se connecter au WebService de la balance")
 
-        # Quand IP/port/scheme changent → rendre le bouton actif si besoin
-        def _on_endpoint_change(*_):
-            if self.btn_connect:
-                self.btn_connect.configure(state="normal", text="Connect")
-        self.var_ip.trace_add("write", _on_endpoint_change)
-        self.var_port.trace_add("write", _on_endpoint_change)
-        self.var_scheme.trace_add("write", _on_endpoint_change)
-
-        # Ligne 1 : Portes + Zero/Tare/Lire
-        b_open = self.factory.create_btn("Open door", self.on_open_door, 1, 0)
+        b_open = self.factory.create_btn("Open door", self.on_open_door, 0, 2)
         ToolTip(b_open, "Ouvrir porte via DraftShieldsService.SetPosition")
-        b_close = self.factory.create_btn("Close door", self.on_close_door, 1, 1)
+
+        b_close = self.factory.create_btn("Close door", self.on_close_door, 0, 3)
         ToolTip(b_close, "Fermer porte via DraftShieldsService.SetPosition")
 
-        b_zero = self.factory.create_btn("Zero", self.on_zero, 1, 2)
-        b_tare = self.factory.create_btn("Tare", self.on_tare, 1, 3)
-        b_read = self.factory.create_btn("Lire poids", self.on_read, 1, 4)
+        b_check = self.factory.create_btn("Check door", self.on_check_door, 0, 4)
+        ToolTip(b_check, "Lire la position des portes via DraftShieldsService.GetPosition")
 
-        self.factory.create_label("Poids:", 1, 5)
-        lbl_w = self.factory.create_label("", 1, 6, sticky=tk.W)
+        b_zero = self.factory.create_btn("Zero", self.on_zero, 0, 5)
+        b_tare = self.factory.create_btn("Tare", self.on_tare, 0, 6)
+
+        b_empty = self.factory.create_btn("Is empty ?", self.on_is_empty, 0, 7)
+        ToolTip(b_empty, "Détecte si le plateau est vide via GrossWeight")
+
+        # --- Ligne 1 ---
+        b_read = self.factory.create_btn("Lire poids", self.on_read, 1, 2)
+
+        self.factory.create_label("Poids:", 1, 3)
+        lbl_w = self.factory.create_label("", 1, 4, sticky=tk.W)
         lbl_w.configure(textvariable=self.var_weight)
 
-        # Ligne 2 : choix de la méthode (menu "Methods")
+        # --- Ligne 2 ---
         self.factory.create_label("Method", 2, 0)
         cb_method = ttk.Combobox(
             self,
@@ -112,19 +92,19 @@ class WinBalance(tk.LabelFrame):
             values=("DOSING", "General Weighing"),
             state="readonly",
         )
-        # cb_method.current(1)  # Par défaut sur General Weighing dans l'UI
         cb_method.grid(row=2, column=1, padx=5, pady=5, columnspan=2, sticky=tk.W)
 
         b_set_method = self.factory.create_btn("Start method", self.on_start_method, 2, 3)
         ToolTip(b_set_method, "Sélectionner la méthode de pesée (menu 'Methods' de la balance)")
 
-        # Ligne 3-4 : paramètres DOSING (DosingAutomation)
+        # --- Ligne 3 ---
         self.factory.create_label("Dosing vial", 3, 0)
         self.factory.create_entry(self.var_d_vial, 3, 1, width=12)
 
         self.factory.create_label("Substance", 3, 2)
         self.factory.create_entry(self.var_d_substance, 3, 3, width=12)
 
+        # --- Ligne 4 ---
         self.factory.create_label("Target", 4, 0)
         self.factory.create_entry(self.var_d_target, 4, 1, width=8)
         cb_dt = ttk.Combobox(
@@ -154,7 +134,13 @@ class WinBalance(tk.LabelFrame):
         )
         ToolTip(self.btn_dosing_start, "Lancer un job de dosage (DosingAutomation) avec 1 job")
 
-        # Ligne 5 : Dosing Head (lecture / écriture)
+        self.btn_dosing_cancel = self.factory.create_btn(
+            "Cancel job", self.on_cancel_dosing_job, 4, 9
+        )
+        self.btn_dosing_cancel.configure(state="disabled")
+        ToolTip(self.btn_dosing_cancel, "Arrêter le polling des notifications et annuler côté UI")
+
+        # --- Ligne 5 ---
         self.factory.create_label("Dosing head", 5, 0)
         self.factory.create_entry(self.var_dosing_head, 5, 1, width=16)
 
@@ -167,7 +153,8 @@ class WinBalance(tk.LabelFrame):
         # Layout
         for c in range(0, 11):
             self.grid_columnconfigure(c, weight=0)
-        self.grid_columnconfigure(6, weight=1)
+        self.grid_columnconfigure(10, weight=1)  # une colonne “tampon” à droite
+
 
     # ---------------------------------------------------------
     # Helpers
@@ -178,10 +165,11 @@ class WinBalance(tk.LabelFrame):
         return sc
 
     def _make_wm(self) -> WM:
+        # Endpoints lus directement depuis SCALE_CONFIG (plus d’édition UI)
         return WM(
-            scheme=self.var_scheme.get().strip(),
-            ip=self.var_ip.get().strip(),
-            port=int(self.var_port.get()),
+            scheme=SCALE_CONFIG.get("scheme", "http"),
+            ip=SCALE_CONFIG.get("ip", "192.168.0.50"),
+            port=int(SCALE_CONFIG.get("port", 81)),
             wsdl_path=SCALE_CONFIG.get("wsdl_path"),
             password=SCALE_CONFIG.get("password"),
             verify=SCALE_CONFIG.get("verify", False),
@@ -199,42 +187,54 @@ class WinBalance(tk.LabelFrame):
             self.btn_connect.configure(state="disabled", text="Connecting…")
         try:
             wm = self._make_wm()
-            wm.connect()  # fait OpenSession + garde SessionId interne
+            wm.connect()  # OpenSession + SessionId interne
             self.devices['scale'] = wm
             self.info.add("Balance connectée (WebService).")
 
-            # --- Auto-start de la méthode sélectionnée dans le menu (par défaut: DOSING)
-            method_ui = (self.var_method.get() or "").strip()   # ex: "DOSING" ou "General Weighing"
+            # Auto-start de la méthode sélectionnée (par défaut: DOSING)
+            method_ui = (self.var_method.get() or "").strip()
             if method_ui:
                 try:
-                    # 1er essai tel quel (si ton firmware veut 'DOSING' en maj, ça marche direct)
                     wm.set_method(method_ui)
                     self.info.add(f"Auto-start method '{method_ui}' → OK")
                 except Exception as e1:
-                    # Fallback de casse le plus courant pour DOSING
                     if method_ui.upper() == "DOSING":
                         try:
                             wm.set_method("Dosing")
                             self.info.add("Auto-start method fallback 'Dosing' → OK")
-                            # harmonise l’UI si tu veux rester en majuscules
                             self.var_method.set("DOSING")
                         except Exception as e2:
                             self.info.add(f"Auto-start method '{method_ui}' échouée: {e2}", level="warning")
                     else:
                         self.info.add(f"Auto-start method '{method_ui}' échouée: {e1}", level="warning")
 
-            # si succès → laisser le bouton désactivé
             if self.btn_connect:
                 self.btn_connect.configure(state="disabled", text="Connected")
+            # remet l’état des boutons dosing
+            self._reset_dosing_buttons()
         except Exception as e:
-            # échec → réactiver pour retente
             if self.btn_connect:
                 self.btn_connect.configure(state="normal", text="Connect")
             self.info.add(f"Connexion WS échouée — {e}", level="error")
 
+    def on_is_empty(self):
+        try:
+            ok, stats = self._get_wm().is_pan_empty(threshold_mg=9.0, samples=10, sleep_s=0.05)
+            if ok:
+                self.info.add(
+                    f"Plateau VIDE (Gross mean={stats['mean_gross_g']*1000:.1f} mg, "
+                    f"σ={stats['std_gross_g']*1000:.1f} mg, seuil={stats['threshold_g']*1000:.1f} mg, n={stats['n']})"
+                )
+            else:
+                self.info.add(
+                    f"Plateau OCCUPÉ (Gross mean={stats['mean_gross_g']*1000:.1f} mg, "
+                    f"σ={stats['std_gross_g']*1000:.1f} mg, seuil={stats['threshold_g']*1000:.1f} mg, n={stats['n']})",
+                    level="warning"
+                )
+        except Exception as e:
+            self.info.add(f"Is empty ?: {e}", level="error")
 
     def _auto_connect(self):
-        # essai silencieux au démarrage
         try:
             self.on_connect()
         except Exception as e:
@@ -242,22 +242,22 @@ class WinBalance(tk.LabelFrame):
 
     def _watch_period(self):
         """Vérifie périodiquement l'état WS ; si perdu → réactiver le bouton."""
-        try:
-            wm = self.devices.get('scale')
-            ok = bool(wm and wm.is_connected() and wm.ping())
-        except Exception:
-            ok = False
+        wm = self.devices.get('scale')
+        ok = False
+        if wm and wm.is_connected():
+            try:
+                _ = wm.get_door_positions()
+                ok = True
+            except Exception:
+                ok = False
 
         if ok:
-            # connecté → bouton reste disabled
             if self.btn_connect:
                 self.btn_connect.configure(state="disabled", text="Connected")
         else:
-            # déconnecté → bouton réactivé
             if self.btn_connect:
                 self.btn_connect.configure(state="normal", text="Connect")
 
-        # replanifie
         self.after(WATCH_PERIOD_MS, self._watch_period)
 
     # ---------------------------------------------------------
@@ -276,6 +276,14 @@ class WinBalance(tk.LabelFrame):
         except Exception as e:
             self.info.add(f"Close door: {e}", level="error")
 
+    def on_check_door(self):
+        """Lit les positions de portes et les loggue."""
+        try:
+            pos = self._get_wm().get_door_positions()
+            self.info.add(f"Door positions: {pos}")
+        except Exception as e:
+            self.info.add(f"Check door: {e}", level="error")
+
     def on_zero(self):
         try:
             resp = self._get_wm().zero()
@@ -292,9 +300,10 @@ class WinBalance(tk.LabelFrame):
 
     def on_read(self):
         try:
-            w = self._get_wm().get_weight()
-            self.var_weight.set(f"{w:.3f} g")
-            self.info.add(f"Poids: {w:.3f} g")
+            w_g = self._get_wm().get_weight()   # renvoie toujours en grammes côté deviceScale
+            w_mg = w_g * 1000.0
+            self.var_weight.set(f"{w_mg:.3f} mg")
+            self.info.add(f"Poids: {w_mg:.3f} mg")
         except Exception as e:
             self.info.add(f"Lecture: {e}", level="error")
 
@@ -309,38 +318,95 @@ class WinBalance(tk.LabelFrame):
     # ---------------------------------------------------------
     # Dosing Automation : démarrage job + thread de notifications
     def _start_dosing_notifications_thread(self):
-        """Lance un thread (si pas déjà lancé) qui poll GetNotifications et auto-confirme."""
         if self._dosing_thread and self._dosing_thread.is_alive():
             return
 
+        # (ré)initialise l’event d’arrêt
+        self._dosing_stop = threading.Event()
+
+        # UI : bloquer Start, activer Cancel
+        if self.btn_dosing_start:
+            self.btn_dosing_start.configure(state="disabled")
+        if hasattr(self, "btn_dosing_cancel") and self.btn_dosing_cancel:
+            self.btn_dosing_cancel.configure(state="normal")
+
         def _worker():
             def log_cb(msg: str):
-                # Appelé depuis le thread de fond → repasser par Tk
                 self.after(0, lambda m=msg: self.info.add(m))
             try:
                 self._get_wm().auto_confirm_dosing_notifications(
                     log_cb=log_cb,
                     long_poll_s=10,
+                    stop_event=self._dosing_stop,  # <<< passe l’event
                 )
                 self.after(0, lambda: self.info.add("DosingAutomation terminé (auto-confirm)."))
             except Exception as e:
-                msg = f"Erreur auto-confirm dosing: {e}"
-                self.after(0, lambda m=msg: self.info.add(m, level="error"))
+                self.after(0, lambda: self.info.add(f"Erreur auto-confirm dosing: {e}", level="error"))
+            finally:
+                # UI : réactiver Start, désactiver Cancel
+                self.after(0, self._reset_dosing_buttons)
 
         self._dosing_thread = threading.Thread(target=_worker, daemon=True)
         self._dosing_thread.start()
 
+    def _reset_dosing_buttons(self):
+        if self.btn_dosing_start:
+            self.btn_dosing_start.configure(state="normal")
+        if hasattr(self, "btn_dosing_cancel") and self.btn_dosing_cancel:
+            self.btn_dosing_cancel.configure(state="disabled")
+
     def on_start_dosing_job(self):
-        """Lance un DosingJobList avec un seul job via IDosingAutomationService."""
         try:
+            # --- A) Fermer la/les porte(s) AVANT tout le reste ---
+            try:
+                resp = self._get_wm().close_door()  # politique robuste (_drive_doors)
+                self.info.add(f"Close door → {resp}")
+            except Exception as e_close:
+                self.info.add(f"Impossible de fermer la porte: {e_close}", level="error")
+                return  # on ne lance pas le job si on ne peut pas fermer
+
+            # --- 0) Dispenser présent ? ---
+            head_name = (self._get_wm().get_dosing_head_name() or "").strip()
+            if not head_name:
+                self.info.add(
+                    "Aucun dispenser détecté (ReadDosingHead vide). "
+                    "Place un dosing head puis relance.",
+                    level="warning"
+                )
+                return
+
+            # --- 1) Vial présente ? ---
+            min_present_mg = float(SCALE_CONFIG.get("vial_presence_min_mg", 1000.0))
+            has_vial, stats = self._get_wm().is_pan_present(
+                min_present_mg=min_present_mg, samples=8, sleep_s=0.04
+            )
+            if not has_vial:
+                self.info.add(
+                    "Aucune vial détectée sur le plateau — je ne lance pas le job. "
+                    f"(Gross≈{(stats['mean_gross_g'] or 0)*1000:.1f} mg, "
+                    f"seuil≈{stats['threshold_g']*1000:.1f} mg)",
+                    level="warning"
+                )
+                return
+
+            # → pré-checks OK : gérer l’UI
+            if self.btn_dosing_start:
+                self.btn_dosing_start.configure(state="disabled")
+            if hasattr(self, "btn_dosing_cancel") and self.btn_dosing_cancel:
+                self.btn_dosing_cancel.configure(state="normal")
+
+            # (facultatif) synchro substance si champ vide
+            if not (self.var_d_substance.get() or "").strip():
+                self.var_d_substance.set(head_name)
+
+            # --- 2) S'assurer que la méthode 'Dosing' est active ---
             method = self.var_method.get().strip().lower()
             if method != "dosing":
-                self.info.add(
-                    "La méthode active n'est pas 'Dosing' → je la démarre avant de lancer le job."
-                )
+                self.info.add("La méthode active n'est pas 'Dosing' → je la démarre avant le job.")
                 self._get_wm().set_method("Dosing")
                 self.var_method.set("DOSING")
 
+            # --- 3) Paramètres et envoi ---
             vial   = self.var_d_vial.get().strip()
             sub    = self.var_d_substance.get().strip()
             tgt    = float(self.var_d_target.get())
@@ -365,23 +431,50 @@ class WinBalance(tk.LabelFrame):
             s_err = resp.get("StartDosingJobListError")
             jerr  = resp.get("JobErrors")
 
-            msg = f"Dosing job '{vial}' / '{sub}' {tgt:g}{t_unit} "
-            msg += f"(−{tol_lo:g}{tol_u}/+{tol_up:g}{tol_u}) → Outcome={out}, CommandId={cmd}"
-            if s_err:
-                msg += f", StartError={s_err}"
-            if err:
-                msg += f", Error={err}"
-            if jerr:
-                msg += f", JobErrors={jerr}"
-
+            msg = f"Dosing job '{vial}' / '{sub}' {tgt:g}{t_unit} (−{tol_lo:g}{tol_u}/+{tol_up:g}{tol_u})"
+            if out:  msg += f" → Outcome={out}"
+            if cmd:  msg += f", CommandId={cmd}"
+            if s_err: msg += f", StartError={s_err}"
+            if err:   msg += f", Error={err}"
+            if jerr:  msg += f", JobErrors={jerr}"
             self.info.add(msg)
 
-            # Si le démarrage s'est bien passé → on lance le polling de notifications
             if out == "Success" and not s_err:
                 self._start_dosing_notifications_thread()
 
         except Exception as e:
             self.info.add(f"Start dosing job: {e}", level="error")
+            self._reset_dosing_buttons()
+    
+    def on_cancel_dosing_job(self):
+        # 1) Demande d’annulation côté WS (priorité: Dosing → Task → CommandId)
+        try:
+            r = self._get_wm().cancel_dosing_job_list()
+            self.info.add(f"CancelCurrentDosingJobListAsync → Outcome={r.get('Outcome')} CmdId={r.get('CommandId')}")
+            if r.get("Outcome") not in (None, "Success"):
+                # fallback #1 : annuler la tâche courante
+                r2 = self._get_wm().cancel_current_task()
+                self.info.add(f"CancelCurrentTask → Outcome={r2.get('Outcome')}")
+                if r2.get("Outcome") not in (None, "Success"):
+                    # fallback #2 : annuler par CommandId si on en a un
+                    r3 = self._get_wm().cancel_command()
+                    self.info.add(f"Session.Cancel(CommandId) → Outcome={r3.get('Outcome')}")
+        except Exception as e:
+            self.info.add(f"Annulation WS a échoué: {e}", level="warning")
+
+        # 2) Signale l’arrêt au worker local (polling des notifs)
+        if self._dosing_stop:
+            self._dosing_stop.set()
+
+        # 3) Joindre rapidement le thread pour calmer les logs
+        if self._dosing_thread and self._dosing_thread.is_alive():
+            try:
+                self._dosing_thread.join(timeout=0.5)
+            except Exception:
+                pass
+
+        self.info.add("Cancel demandé → envoi de l'annulation et arrêt du polling en cours.")
+        self._reset_dosing_buttons()
 
     # ---------------------------------------------------------
     # Dosing Head : lecture / écriture
@@ -389,15 +482,11 @@ class WinBalance(tk.LabelFrame):
         """Lit le nom du dosing head en place via ReadDosingHead et aligne aussi la substance du job."""
         try:
             name = self._get_wm().get_dosing_head_name().strip()
-            # Alimente le champ "Dosing head" (ligne 5)
             self.var_dosing_head.set(name)
-            # Et synchronise la substance du job de dosing
             self.var_d_substance.set(name)
-            # Log minimaliste (seulement le nom)
             self.info.add(f"Dosing head lu: {name or '—'}")
         except Exception as e:
             self.info.add(f"Read dosing head: {e}", level="error")
-
 
     def on_write_dosing_head(self):
         """Écrit le nom dans le dosing head via WriteDosingHead et aligne aussi la substance du job."""
@@ -408,7 +497,6 @@ class WinBalance(tk.LabelFrame):
                 return
 
             resp = self._get_wm().set_dosing_head_name(name)
-            # Synchronise la substance du job de dosing avec ce qu'on vient d’inscrire
             self.var_d_substance.set(name)
             self.info.add(f"Dosing head écrit: '{name}' → {resp}")
         except Exception as e:

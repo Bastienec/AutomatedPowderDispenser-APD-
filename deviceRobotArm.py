@@ -32,6 +32,7 @@ class _UR3Client:
 
         # RTDE
         self.rtde_register_default: int = int(cfg.get("rtde_input_register", 20))
+        self.disp_register: int = int(cfg.get("disp_rtde_input_register", 21))
 
         self._dash_sock: Optional[socket.socket] = None
         self._lock = threading.Lock()
@@ -101,6 +102,7 @@ class _UR3Client:
     def power_off(self) -> str:        return self.send_dashboard("power off")
     def brake_release(self) -> str:    return self.send_dashboard("brake release")
     def play(self) -> str:             return self.send_dashboard("play")
+    def pause(self) -> str:            return self.send_dashboard("pause")
     def stop(self) -> str:             return self.send_dashboard("stop")
     def get_loaded_program(self) -> str:  return self.send_dashboard("get loaded program")
     def get_program_state(self) -> str:   return self.send_dashboard("programState")
@@ -174,6 +176,10 @@ class _UR3Client:
     def set_vials_nb(self, vnum: int, register: Optional[int] = None) -> None:
         reg = self.rtde_register_default if register is None else int(register)
         self.set_input_int_register_rtde(reg, int(vnum))
+    
+    def set_disp_nb(self, dnum: int, register: Optional[int] = None) -> None:
+        reg = self.disp_register if register is None else int(register)
+        self.set_input_int_register_rtde(reg, int(dnum))
 
 
 # --- Façade GUI ---
@@ -196,6 +202,7 @@ class UR3:
     def power_off(self):         return self._impl.power_off()
     def brake_release(self):     return self._impl.brake_release()
     def play(self):              return self._impl.play()
+    def pause(self):             return self._impl.pause()
     def stop(self):              return self._impl.stop()
     def get_loaded_program(self):  return self._impl.get_loaded_program()
     def get_program_state(self):   return self._impl.get_program_state()
@@ -207,3 +214,4 @@ class UR3:
     # RTDE
     def set_input_int_register_rtde(self, *a, **k): return self._impl.set_input_int_register_rtde(*a, **k)
     def set_vials_nb(self, *a, **k): return self._impl.set_vials_nb(*a, **k)
+    def set_disp_nb(self, *a, **k): return self._impl.set_disp_nb(*a, **k)

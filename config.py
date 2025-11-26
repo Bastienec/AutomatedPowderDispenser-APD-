@@ -35,12 +35,13 @@ SCALE_CONFIG = {
     "autoconnect": True,                  # tenter la connexion automatique au démarrage
 
     # Paramètres portes (SetPosition)
-    "door_ids": ["LeftOuter", "RightOuter"],
+    "door_ids": ["LeftOuter"],
     "open_width": 100,
     "close_width": 0,
+
+    "vial_presence_min_mg": 14000.0,  # min masse brute pour considérer qu'une vial est présente
 }
 
-# --- UR3 
 # --- UR3 
 UR3_CONFIG = {
     'ip': '192.168.0.5',
@@ -54,9 +55,18 @@ UR3_CONFIG = {
     "programs_dir": "/programs",  # racine standard sur les UR e-Series
 
     "rtde_input_register": 20,   # GPii[n] utilisé pour VialsNB
+    "disp_rtde_input_register": 21, # GPii[n] pour DispNB
     "vial_id_to_number": {
         "E1-1": 4, "E1-2": 3, "E1-3": 2, "E1-4": 1,
         "E2-1": 7, "E2-2": 6, "E2-3": 5,
         "E3-1": 11, "E3-2": 10, "E3-3": 9, "E3-4": 8,
     },
+}
+
+STORAGE_CONFIG = {
+    
+    "ids": ["S1", "S2", "S3", "S4"],    # IDs logiques disponibles
+    "order": ["S3", "S4", "S1", "S2"],      # Ordre VISUEL des positions (Top-Left, Top-Right, Bottom-Left, Bottom-Right)
+    "id_to_number": {"S1": 1, "S2": 2, "S3": 3, "S4": 4},        # (optionnel) mapping logique → numéro poussé sur DispNB
+    "labels": {"S1":"NaHCO3","S2":"CouCou Edy","S3":"CouCou Louis","S4":"Autre chose"},        #libellés si on veut afficher autre chose que l'ID
 }
