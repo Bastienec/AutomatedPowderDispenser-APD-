@@ -190,7 +190,21 @@ class WinBalance(tk.LabelFrame):
             wm.connect()  # OpenSession + SessionId interne
             self.devices['scale'] = wm
             self.info.add("Balance connectée (WebService).")
-
+            
+            # Réveil immédiat à la connexion
+            try:
+                if wm.wakeup_from_standby():
+                    self.info.add("Balance réveillée (WakeupFromStandby).")
+                else:
+                    self.info.add("WakeupFromStandby → déjà réveillée ou état inchangé.")
+            except Exception as e:
+                # Petit 'nudge' inoffensif qui réveille souvent l'UI SOAP
+                try:
+                    _ = wm.get_door_positions()
+                    self.info.add("WakeupFromStandby a échoué → nudge GetPosition effectué.")
+                except Exception:
+                    self.info.add(f"WakeupFromStandby a échoué: {e}", level="warning")
+                    
             # Auto-start de la méthode sélectionnée (par défaut: DOSING)
             method_ui = (self.var_method.get() or "").strip()
             if method_ui:
@@ -336,6 +350,7 @@ class WinBalance(tk.LabelFrame):
             try:
                 self._get_wm().auto_confirm_dosing_notifications(
                     log_cb=log_cb,
+                    verbose=True,
                     long_poll_s=10,
                     stop_event=self._dosing_stop,  # <<< passe l’event
                 )

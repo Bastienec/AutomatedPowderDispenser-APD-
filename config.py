@@ -28,7 +28,7 @@ SCALE_CONFIG = {
     "scheme": "http",                     # "http" ou "https"
     "ip": "192.168.0.50",
     "port": 81,                           # 81 en HTTP, 444 en HTTPS
-    "wsdl_path": r"C:\Users\eshaya\Nextcloud\Bastien_nextCloud\project\AutomatedPowderDispenser-main\soft\METTLER TOLEDO\MT.Laboratory.Balance.XprXsr.V03.wsdl",
+    "wsdl_path": r"C:\Users\eshaya\Nextcloud\Bastien_nextCloud\project\AutomatedPowderDispenser-main\documents\Mettler\MT.Laboratory.Balance.XprXsr.V03.wsdl",
     "password": "SWISSCAT",               # mot de passe pour décrypter le SessionId
     "verify": False,                      # en HTTPS: False ou chemin .cer ; en HTTP: ignoré
     "timeout_s": 8,

@@ -17,10 +17,10 @@ from winStorage import WinStorage
 # Constantes / Config
 # ---------------------------------------------------------------------------
 WATCH_PERIOD_MS = 3000  # check connexion toutes les 3 s
+RUN_POLL_MS = 700  # périodicité du sondage quand le programme tourne (~0.7 s)
 VIAL_ID_TO_NUMBER = UR3_CONFIG.get("vial_id_to_number", {})
 RTDE_INPUT_REGISTER = int(UR3_CONFIG.get("rtde_input_register", 20))
 DISP_RTDE_INPUT_REGISTER = int(UR3_CONFIG.get("disp_rtde_input_register", 21))
-
 
 class WinRobotArm(tk.LabelFrame):
     """Pilote UR3 (connexion, états, play/pause/stop) avec autoload .urp via combobox."""
@@ -50,13 +50,14 @@ class WinRobotArm(tk.LabelFrame):
         # Programmes (.urp)
         self.var_selected_program = tk.StringVar(value="")
         self.cmb_programs: ttk.Combobox | None = None
-        self._suspend_combo_event = 0  # bloqueur d’évènement
 
         # Pointeurs UI
         self.btn_connect: tk.Button | None = None
         self.btn_pause: tk.Button | None = None
         self.btn_stop: tk.Button | None = None
         self.btn_play: tk.Button | None = None
+        self._suspend_combo_event = 0   # bloqueur d’évènement
+        self._run_watch_id = None  # id du timer de sondage "fin de programme"
 
         # Sous-fenêtres
         self.win_vials: WinVials | None = None
@@ -171,7 +172,7 @@ class WinRobotArm(tk.LabelFrame):
         self.win_vials.grid(row=5, column=0, columnspan=2, sticky="ns", padx=5, pady=5)
 
         self.win_storage = WinStorage(self, self.info, title="Storage")
-        self.win_storage.grid(row=5, column=4, sticky="ns", padx=5, pady=5)
+        self.win_storage.grid(row=5, column=4, columnspan=3, sticky="ns", padx=5, pady=5)
 
         self._bind_shortcuts()
         self._set_connected_ui(False, initialize=True)
@@ -280,6 +281,7 @@ class WinRobotArm(tk.LabelFrame):
                 self.devices["ur3"].close()
         finally:
             self.devices["ur3"] = None
+        self._stop_run_watch()
         self.var_status.set("Disconnected")
         self.btn_connect.configure(state="normal", text="Connect")
         self.btn_disconnect.configure(state="disabled")
@@ -305,6 +307,74 @@ class WinRobotArm(tk.LabelFrame):
                 self.devices["ur3"] = None
             self.var_status.set("Disconnected")
         self.after(WATCH_PERIOD_MS, self._watch_period)
+
+    # ------------------------------------------------------------------
+    # Run watch (sondage fin de programme)
+    # ------------------------------------------------------------------
+    def _canon_prog_state(self, s: str) -> str:
+        """
+        Normalise le texte brut renvoyé par Dashboard en: RUNNING / PAUSED / STOPPED / UNKNOWN.
+        Gère 'PLAYING', 'PAUSE', et les éventuels préfixes 'programState:'.
+        """
+        up = str(s or "").strip().upper()
+        if ":" in up:  # ex: "programState: PLAYING"
+            up = up.split(":", 1)[1].strip()
+        if "PLAYING" in up or "RUNNING" in up:
+            return "RUNNING"
+        if "PAUSE" in up or "PAUSED" in up:
+            return "PAUSED"
+        if "STOPPED" in up or up == "IDLE" or up == "READY":
+            return "STOPPED"
+        return "UNKNOWN"
+
+    def _start_run_watch(self):
+        """Démarre le polling tant que l’UI est en 'running'."""
+        if self._run_watch_id:  # déjà actif
+            return
+        # premier tick immédiat
+        self._run_watch()
+
+    def _stop_run_watch(self):
+        """Arrête le polling si actif."""
+        if self._run_watch_id is not None:
+            try:
+                self.after_cancel(self._run_watch_id)
+            except Exception:
+                pass
+            self._run_watch_id = None
+
+    def _run_watch(self):
+        # Si l’UI n’est plus en 'running', couper le polling
+        if self._state != "running":
+            self._stop_run_watch()
+            return
+
+        try:
+            arm = self._get_ur3()
+            raw = arm.get_program_state()            # ex: "programState: PLAYING"
+            canon = self._canon_prog_state(raw)      # RUNNING / PAUSED / STOPPED / UNKNOWN
+
+            # (optionnel) refléter ce qu’on lit dans le label pour debug
+            try:
+                self.var_prog_state.set(raw)
+            except Exception:
+                pass
+
+            if canon == "STOPPED":
+                self.info.add("UR3: programme terminé (state=STOPPED).")
+                self._set_state("idle")              # → Play actif, Pause/Stop gris
+                self._stop_run_watch()
+            elif canon == "PAUSED" and self._state == "running":
+                # Le robot s’est mis en pause sans passer par le bouton
+                self.info.add("UR3: programme en pause (détecté par watcher).")
+                self._set_state("paused")
+
+        except Exception as e:
+            self.info.add(f"Run watch: erreur sondage état programme → {e}", level="warning")
+            self._stop_run_watch()
+        finally:
+            if self._state == "running":
+                self._run_watch_id = self.after(RUN_POLL_MS, self._run_watch)
 
     # -----------------------------------------------------------------------
     # Dashboard helpers
@@ -337,12 +407,23 @@ class WinRobotArm(tk.LabelFrame):
             self.info.add(f"UR3 robotmode → {rm}")
             self.info.add(f"UR3 safetymode → {sm}")
 
-            prog = arm.get_loaded_program()
+            prog  = arm.get_loaded_program()
             state = arm.get_program_state()
-            self.var_program.set(prog)        # ex: "Loaded program: /programs/xxx.urp"
-            self.var_prog_state.set(state)    # ex: "RUNNING", "STOPPED", "PAUSED"
+            self.var_program.set(prog)        # "Loaded program: …"
+            self.var_prog_state.set(state)    # "programState: PLAYING/PAUSE/…"
             self.info.add(f"UR3 programme → {prog}")
             self.info.add(f"UR3 state → {state}")
+
+            # 👇 Aligne l’UI sur l’état robot
+            canon = self._canon_prog_state(state)  # RUNNING / PAUSED / STOPPED / UNKNOWN
+            if canon == "RUNNING":
+                self._set_state("running")
+                self._start_run_watch()  # relance le watcher si besoin
+            elif canon == "PAUSED":
+                self._set_state("paused")
+            elif canon == "STOPPED":
+                self._set_state("idle")
+                self._stop_run_watch()
 
         except (RuntimeError, UR3ConnectionError) as e:
             self.info.add(f"UR3 refresh modes → ERREUR : {e}", level="error")
@@ -429,6 +510,8 @@ class WinRobotArm(tk.LabelFrame):
             resp   = arm.play()
             self._set_state("running")
             self.btn_stop.configure(state="normal")
+            self._start_run_watch()
+            self.after(150, self.on_refresh_modes)
             after  = arm.get_program_state()
             self.info.add(f"UR3 play → state_before={before} ; play→{resp} ; state_after={after}")
         except (RuntimeError, UR3ConnectionError, ValueError) as e:
@@ -456,6 +539,7 @@ class WinRobotArm(tk.LabelFrame):
 
     def on_stop(self):
         self._call_dash("stop", lambda arm: arm.stop())
+        self._stop_run_watch()
         self._set_state("idle")
 
     # -----------------------------------------------------------------------

@@ -34,8 +34,14 @@ class winMode(tk.Frame):
         self.frame_auto = ttk.Frame(self.notebook)
         self.frame_man = ttk.Frame(self.notebook)
 
-        self.win_auto = winAuto.WinAuto(self.frame_auto, self.win_info, self.devices)
         self.win_man = winMan.WinMan(self.frame_man, self.win_info, self.devices)
+        self.win_auto = winAuto.WinAuto(self.frame_auto, self.win_info, self.devices)
+
+        # (pour réutiliser toutes les vérifs déjà codées)
+        self.win_auto.attach_manual_views(
+            robot_window=self.win_man.win_robot,
+            balance_window=self.win_man.win_balance,
+        )       
 
         self.win_auto.grid(row=0, column=0, pady=5, padx=5, sticky=tk.EW)
         self.win_man.grid(row=0, column=0, pady=5, padx=5, sticky=tk.EW)
