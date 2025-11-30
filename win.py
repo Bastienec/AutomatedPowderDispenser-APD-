@@ -10,6 +10,7 @@ import tkinter.ttk as ttk
 import winInfo
 import winMan
 import winAuto
+import winJsonAuto
 #-------------------------------------------------------------------------------
 # CLASS
 class winMode(tk.Frame):
@@ -33,6 +34,7 @@ class winMode(tk.Frame):
         """Create and add frames to the notebook."""
         self.frame_auto = ttk.Frame(self.notebook)
         self.frame_man = ttk.Frame(self.notebook)
+        self.frame_json = ttk.Frame(self.notebook)
 
         self.win_man = winMan.WinMan(self.frame_man, self.win_info, self.devices)
         self.win_auto = winAuto.WinAuto(self.frame_auto, self.win_info, self.devices)
@@ -43,14 +45,117 @@ class winMode(tk.Frame):
             balance_window=self.win_man.win_balance,
         )       
 
+        self.win_json_auto = winJsonAuto.WinJsonAuto(
+            self.frame_json,
+            self.win_info,
+            self.devices,
+            robot_win=self.win_man.win_robot,
+            balance_win=self.win_man.win_balance,
+            on_select_vial=self._json_select_vial,
+            on_select_powder=self._json_select_powder,
+            on_prepare_dosing=self._json_prepare_dosing,
+        )
+
         self.win_auto.grid(row=0, column=0, pady=5, padx=5, sticky=tk.EW)
         self.win_man.grid(row=0, column=0, pady=5, padx=5, sticky=tk.EW)
+        self.win_json_auto.grid(row=0, column=0, sticky="nsew")
 
         self.notebook.add(self.frame_man, text='Mode Man')
         self.notebook.add(self.frame_auto, text='Mode Auto')
+        self.notebook.add(self.frame_json, text="Mode JSON")
         
         # sélectionner "Man" au démarrage
         self.notebook.select(self.frame_man)
+
+    # ------------------------------------------------------------------
+    # Callbacks utilisés par WinJsonAuto
+    # ------------------------------------------------------------------
+    def _json_select_vial(self, vial_id: str) -> None:
+        """
+        Sélectionne la vial dans l'UI 'Mode Man' à partir de son ID logique
+        (par ex. 'E1-1', 'F2-3', etc.).
+
+        Cette fonction est appelée par WinJsonAuto AVANT P1 pour chaque vial.
+        """
+        robot = getattr(self.win_man, "win_robot", None)
+        if robot is None or robot.win_vials is None:
+            raise RuntimeError("WinRobotArm / WinVials non initialisé.")
+
+        vials_ui = robot.win_vials
+
+        # On tente d'abord dans le groupe E, puis dans le groupe F
+        vials_ui.set_selected_vial_c(vial_id)
+        sel_id, _ = robot._get_selected_vial_any()
+        if sel_id != vial_id:
+            vials_ui.set_selected_vial_f(vial_id)
+            sel_id, _ = robot._get_selected_vial_any()
+
+        if sel_id != vial_id:
+            # Rien trouvé → on remonte une erreur jusqu'à WinJsonAuto._abort()
+            self.win_info.add(
+                f"Mode JSON: vial '{vial_id}' introuvable dans WinVials.",
+                level="error",
+            )
+            raise RuntimeError(f"vial '{vial_id}' inconnue dans l'UI")
+
+    def _json_select_powder(self, vial_id: str, powder_name: str) -> None:
+        """
+        Sélectionne le bon storage/dispenser dans l'UI 'Mode Man' à partir
+        du nom de poudre (doit matcher STORAGE_CONFIG['labels']).
+        Appelée par WinJsonAuto AVANT chaque P2.
+        """
+        robot = getattr(self.win_man, "win_robot", None)
+        if robot is None or robot.win_storage is None:
+            raise RuntimeError("WinRobotArm / WinStorage non initialisé.")
+
+        storage_ui = robot.win_storage
+
+        # Utilise la fonction utilitaire de WinRobotArm qui regarde
+        # dans STORAGE_CONFIG['labels'] (config.py)
+        storage_id, dnum = robot._find_storage_by_substance_label(powder_name)
+        if not storage_id:
+            self.win_info.add(
+                f"Mode JSON: aucune position de storage ne correspond à la poudre '{powder_name}'.",
+                level="error",
+            )
+            raise RuntimeError(f"poudre '{powder_name}' inconnue")
+
+        storage_ui.set_selected_storage(storage_id)
+
+    def _json_prepare_dosing(self, vial_id: str, powder_name: str, qty_mg: float) -> None:
+        """
+        Prépare les champs du dosing job dans WinBalance :
+
+        - nom de la vial (ici on met vial_id, adapte si Mettler veut autre chose)
+        - nom de la poudre
+        - target weight en mg
+        - unité 'mg'
+        """
+        wb = getattr(self.win_man, "win_balance", None)
+        if wb is None:
+            raise RuntimeError("WinBalance non initialisé.")
+
+        # Vial : si ton Mettler exige 'Vessel1', 'Vessel2', etc.,
+        # tu peux faire ici un mapping JSON_vial_id -> nom de vessel.
+        try:
+            wb.var_d_vial.set(str(vial_id))
+        except Exception:
+            pass
+
+        try:
+            wb.var_d_substance.set(str(powder_name))
+        except Exception:
+            pass
+
+        try:
+            wb.var_d_target.set(float(qty_mg))
+        except Exception:
+            raise RuntimeError(f"qty_mg invalide: {qty_mg!r}")
+
+        try:
+            wb.var_d_tu.set("mg")
+        except Exception:
+            pass
 
 class WinMain(tk.Tk):
     def __init__(self, devices, *args, **kwargs):
